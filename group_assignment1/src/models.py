@@ -158,9 +158,10 @@ class ModelIMU:
         """
         G_c = np.zeros((15, 12))
         Rq = x_est_nom.ori.as_rotmat()
-
-        # TODO remove this
-        G_c = models_solu.ModelIMU.get_error_G_c(self, x_est_nom)
+        G_c[block_3x3(1, 0)] = -Rq
+        G_c[block_3x3(2, 1)] = -np.eye(3)
+        G_c[block_3x3(3, 2)] = np.eye(3)
+        G_c[block_3x3(4, 3)] = np.eye(3)
 
         return G_c
 
@@ -186,13 +187,17 @@ class ModelIMU:
             A_d (ndarray[15, 15]): discrede transition matrix
             GQGT_d (ndarray[15, 15]): discrete noise covariance matrix
         """
-        A_c = None  # TODO
-        G_c = None  # TODO
-        GQGT_c = None  # TODO
+        A_c = self.A_c(x_est_nom, z_corr)  # TODO
+        G_c = self.get_error_G_c(x_est_nom)  # TODO
+        GQGT_c = G_c @ x_est_nom.cov @ G_c.T * dt  # TODO
 
-        exponent = None  # TODO
-        VanLoanMatrix = None  # TODO
+        exponent = np.zeros((30, 30))
+        exponent[block_15x15(0, 0)] = -A_c
+        exponent[block_15x15(0, 1)] = GQGT_c
+        exponent[block_15x15(1, 1)] = A_c.T
+        exponent = exponent*dt
 
+        VanLoanMatrix = scipy.linalg.expm(exponent)
         A_d = None  # TODO
         GQGT_d = None  # TODO
 
