@@ -7,7 +7,7 @@ from states import (ErrorState, ImuMeasurement,
                     CorrectedImuMeasurement, NominalState,
                     GnssMeasurement, EskfState)
 from quaternion import RotationQuaterion
-from utils.indexing import block_3x3
+from utils.indexing import block_3x3, block_15x15
 from utils.cross_matrix import get_cross_matrix
 from solution import models as models_solu
 
@@ -69,10 +69,11 @@ class ModelIMU:
         z_corr = CorrectedImuMeasurement(acc=acc_est, avel=avel_est)
         return z_corr
 
+    
     def predict_nom(self,
-                    x_est_nom: NominalState,
-                    z_corr: CorrectedImuMeasurement,
-                    dt: float) -> NominalState:
+                x_est_nom: NominalState,
+                z_corr: CorrectedImuMeasurement,
+                dt: float) -> NominalState:
         """Predict the nominal state, given a corrected IMU measurement and a 
         time step, by discretizing (10.58) in the book.
 
@@ -88,23 +89,29 @@ class ModelIMU:
         Returns:
             x_nom_pred: predicted nominal state
         """
-        pos_pred = x_est_nom.pos + dt * x_est_nom.vel + 0.5*dt**2*z_corr.acc
-        vel_pred = x_est_nom.vel + dt * z_corr.acc  # TODO
+           
+        R_nb = x_est_nom.ori.as_rotmat()                 
+        a_frame = R_nb @ z_corr.acc + self.g              
 
-        delta_rot = RotationQuaterion.from_avec(z_corr.avel*dt)  # TODO
-        ori_pred = x_est_nom.ori * delta_rot  # TODO
+        vel_pred = x_est_nom.vel + dt * a_frame #Forward euler to discretize
+        pos_pred = x_est_nom.pos + dt * x_est_nom.vel + 0.5 * dt**2 * a_frame #Forward euler and integration to get pos i think correct
 
-        acc_bias_pred = x_est_nom.accm_bias  # TODO
-        gyro_bias_pred = x_est_nom.gyro_bias  # TODO
+        k = dt * z_corr.avel #Making small rotation vector k by using measurement w in body
+        delta_rot = RotationQuaterion.from_avec(k) 
+        ori_pred = x_est_nom.ori * delta_rot  #Using the new rotation to shift the known orientation
 
-        # TODO remove this
+        phi_acc  = np.exp(-self.accm_bias_p * dt) #1 order ODE sol for the bias
+        phi_gyro = np.exp(-self.gyro_bias_p * dt)
+        acc_bias_pred = phi_acc  * x_est_nom.accm_bias
+        gyro_bias_pred = phi_gyro * x_est_nom.gyro_bias
+
         x_nom_pred = NominalState(
-            pos=pos_pred,
-            vel=vel_pred,
-            ori=ori_pred,
-            accm_bias=acc_bias_pred,
-            gyro_bias=gyro_bias_pred,
-        )
+                pos=pos_pred,
+                vel=vel_pred,
+                ori=ori_pred,
+                accm_bias=acc_bias_pred,
+                gyro_bias=gyro_bias_pred,
+            )
         return x_nom_pred
 
     def A_c(self,
@@ -187,9 +194,9 @@ class ModelIMU:
             A_d (ndarray[15, 15]): discrede transition matrix
             GQGT_d (ndarray[15, 15]): discrete noise covariance matrix
         """
-        A_c = self.A_c(x_est_nom, z_corr)  # TODO
-        G_c = self.get_error_G_c(x_est_nom)  # TODO
-        GQGT_c = G_c @ x_est_nom.cov @ G_c.T * dt  # TODO
+        A_c = self.A_c(x_est_nom, z_corr)  
+        G_c = self.get_error_G_c(x_est_nom)  
+        GQGT_c = G_c @ x_est_nom.cov @ G_c.T * dt 
 
         exponent = np.zeros((30, 30))
         exponent[block_15x15(0, 0)] = -A_c
@@ -198,12 +205,11 @@ class ModelIMU:
         exponent = exponent*dt
 
         VanLoanMatrix = scipy.linalg.expm(exponent)
-        A_d = None  # TODO
-        GQGT_d = None  # TODO
+        V2 = VanLoanMatrix[:15, 15:]
+        V1 = VanLoanMatrix[15:, 15:]
 
-        # TODO remove this
-        A_d, GQGT_d = models_solu.ModelIMU.get_discrete_error_diff(
-            self, x_est_nom, z_corr, dt)
+        A_d = V1.T
+        GQGT_d = V1.T @ V2
 
         return A_d, GQGT_d
 
@@ -226,10 +232,57 @@ class ModelIMU:
         """
         x_est_prev_nom = x_est_prev.nom
         x_est_prev_err = x_est_prev.err
-        Ad, GQGTd = None, None  # TODO
+        Ad, GQGTd = ModelIMU.get_discrete_error_diff(self, x_est_prev_nom, z_corr, dt)
         P_pred = np.eye(15)  # TODO
 
         # TODO remove this
         x_err_pred = models_solu.ModelIMU.predict_err(
             self, x_est_prev, z_corr, dt)
         return x_err_pred
+    
+    def predict_err(self,
+                x_est_prev: EskfState,
+                z_corr: CorrectedImuMeasurement,
+                dt: float,
+                ) -> MultiVarGauss[ErrorState]:
+        """Predict the error state
+
+        Hint: This is doing a discrete step of (10.68) where x_err 
+        is a multivariate gaussian.
+
+        Args:
+            x_est_prev: previous estimated eskf state
+            z_corr: corrected IMU measuremnt
+            dt: time step
+        Returns:
+            x_err_pred: predicted error state gaussian
+        """
+        x_est_prev_nom = x_est_prev.nom
+        x_est_prev_err = x_est_prev.err
+
+        Ad, GQGTd = self.get_discrete_error_diff(x_est_prev_nom, z_corr, dt)
+
+        mu_prev = x_est_prev_err.mean
+        P_prev = x_est_prev_err.cov
+
+        mu_prev_vec = np.hstack([
+            mu_prev.pos,        
+            mu_prev.vel,        
+            mu_prev.ori,        
+            mu_prev.accm_bias,  
+            mu_prev.gyro_bias,  
+        ])
+
+        mu_pred_vec = Ad @ mu_prev_vec
+        P_pred = Ad @ P_prev @ Ad.T + GQGTd
+
+        err_mean_pred = ErrorState(
+            pos=mu_pred_vec[0:3],
+            vel=mu_pred_vec[3:6],
+            ori=mu_pred_vec[6:9],
+            accm_bias=mu_pred_vec[9:12],
+            gyro_bias=mu_pred_vec[12:15],
+        )
+
+        return MultiVarGauss(mean=err_mean_pred, cov=P_pred)
+
