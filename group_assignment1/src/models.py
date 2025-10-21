@@ -96,9 +96,10 @@ class ModelIMU:
         vel_pred = x_est_nom.vel + dt * a_frame #Forward euler to discretize
         pos_pred = x_est_nom.pos + dt * x_est_nom.vel + 0.5 * dt**2 * a_frame #Forward euler and integration to get pos i think correct
 
-        k = dt * z_corr.avel #Making small rotation vector k by using measurement w in body
-        delta_rot = RotationQuaterion.from_avec(k) 
-        ori_pred = x_est_nom.ori * delta_rot  #Using the new rotation to shift the known orientation
+        k = dt * np.asarray(z_corr.avel).reshape(3,)
+        delta_rot = RotationQuaterion.from_avec(k)
+        ori_pred  = x_est_nom.ori @ delta_rot
+
 
         phi_acc  = np.exp(-self.accm_bias_p * dt) #1 order ODE sol for the bias
         phi_gyro = np.exp(-self.gyro_bias_p * dt)
@@ -196,7 +197,8 @@ class ModelIMU:
         """
         A_c = self.A_c(x_est_nom, z_corr)  
         G_c = self.get_error_G_c(x_est_nom)  
-        GQGT_c = G_c @ x_est_nom.cov @ G_c.T * dt 
+        GQGT_c = G_c @ self.Q_c @ G_c.T
+ 
 
         exponent = np.zeros((30, 30))
         exponent[block_15x15(0, 0)] = -A_c
@@ -232,57 +234,17 @@ class ModelIMU:
         """
         x_est_prev_nom = x_est_prev.nom
         x_est_prev_err = x_est_prev.err
-        Ad, GQGTd = ModelIMU.get_discrete_error_diff(self, x_est_prev_nom, z_corr, dt)
-        P_pred = np.eye(15)  # TODO
-
-        # TODO remove this
-        x_err_pred = models_solu.ModelIMU.predict_err(
-            self, x_est_prev, z_corr, dt)
-        return x_err_pred
-    
-    def predict_err(self,
-                x_est_prev: EskfState,
-                z_corr: CorrectedImuMeasurement,
-                dt: float,
-                ) -> MultiVarGauss[ErrorState]:
-        """Predict the error state
-
-        Hint: This is doing a discrete step of (10.68) where x_err 
-        is a multivariate gaussian.
-
-        Args:
-            x_est_prev: previous estimated eskf state
-            z_corr: corrected IMU measuremnt
-            dt: time step
-        Returns:
-            x_err_pred: predicted error state gaussian
-        """
-        x_est_prev_nom = x_est_prev.nom
-        x_est_prev_err = x_est_prev.err
-
         Ad, GQGTd = self.get_discrete_error_diff(x_est_prev_nom, z_corr, dt)
-
-        mu_prev = x_est_prev_err.mean
-        P_prev = x_est_prev_err.cov
-
-        mu_prev_vec = np.hstack([
-            mu_prev.pos,        
-            mu_prev.vel,        
-            mu_prev.ori,        
-            mu_prev.accm_bias,  
-            mu_prev.gyro_bias,  
-        ])
-
+        mu_prev_vec = x_est_prev_err.mean
+        P_prev      = x_est_prev_err.cov
         mu_pred_vec = Ad @ mu_prev_vec
-        P_pred = Ad @ P_prev @ Ad.T + GQGTd
+        P_pred      = Ad @ P_prev @ Ad.T + GQGTd
 
-        err_mean_pred = ErrorState(
-            pos=mu_pred_vec[0:3],
-            vel=mu_pred_vec[3:6],
-            ori=mu_pred_vec[6:9],
-            accm_bias=mu_pred_vec[9:12],
-            gyro_bias=mu_pred_vec[12:15],
-        )
+        return MultiVarGauss(mean=mu_pred_vec, cov=P_pred)
+    
 
-        return MultiVarGauss(mean=err_mean_pred, cov=P_pred)
+
+
+    
+
 
