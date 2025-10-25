@@ -11,18 +11,18 @@ accm_corr, gyro_corr, lever_arm = load_drone_params(fname_data_sim)
 
 """Everything below here can be altered"""
 start_time_sim = 0.  # Start time, set to None for full time
-end_time_sim = 300  # End time in seconds, set to None to use all data
+end_time_sim = 100  # End time in seconds, set to None to use all data
 
 imu_min_dt_sim = None  # IMU is sampled at 100 Hz, use to downsample
 gnss_min_dt_sim = None  # GPS is sampled at 1 Hz, use this to downsample
 
 imu_sim = ModelIMU(
-    accm_std=1.167e-3,   # Accelerometer standard deviation, TUNABE
-    accm_bias_std=4e-3,  # Accelerometer bias standard deviation
+    accm_std=1.167e-10,   # Accelerometer standard deviation, TUNABE
+    accm_bias_std=4e-10,  # Accelerometer bias standard deviation
     accm_bias_p=1e-16,  # Accelerometer inv time constant see (10.57)
 
-    gyro_std=4.36e-5,  # Gyro standard deviation
-    gyro_bias_std=5e-5,  # Gyro bias standard deviation
+    gyro_std=4.36e-10,  # Gyro standard deviation
+    gyro_bias_std=5e-10,  # Gyro bias standard deviation
     gyro_bias_p=1e-16,  # Gyro inv time constant see (10.57)
 
     accm_correction=accm_corr,  # Accelerometer correction matrix
@@ -30,8 +30,8 @@ imu_sim = ModelIMU(
 )
 
 gnss_sim = SensorGNSS(
-    gnss_std_ne=0.3,  # GNSS standard deviation in North and East
-    gnss_std_d=0.5,  # GNSS standard deviation in Down
+    gnss_std_ne=0.3e-3,  # GNSS standard deviation in North and East
+    gnss_std_d=0.53-3,  # GNSS standard deviation in Down
     lever_arm=lever_arm,  # antenna position relative to origin
 )
 

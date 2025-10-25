@@ -11,7 +11,7 @@ accm_corr, gyro_corr, lever_arm = load_drone_params(fname_data_real)
 
 """Everything below here can be altered"""
 start_time_real = 200.  # Start time, set to None for full time
-end_time_real = 600  # End time in seconds, set to None to use all data
+end_time_real = 300  # End time in seconds, set to None to use all data
 
 imu_min_dt_real = None  # IMU is sampled at ~250 Hz, use to downsample
 gnss_min_dt_real = None  # GPS is sampled at ~10 Hz, use this to downsample
@@ -25,8 +25,8 @@ imu_real = ModelIMU(
     gyro_bias_std=5e-5,  # Gyro bias standard deviation
     gyro_bias_p=1e-16,  # Gyro inv time constant see (10.57)
 
-    accm_correction=accm_corr,  # Accelerometer correction matrix
-    gyro_correction=gyro_corr,  # Gyro correction matrix
+    accm_correction=np.round(accm_corr),  # Accelerometer correction matrix
+    gyro_correction=np.round(gyro_corr),  # Gyro correction matrix
 )
 
 gnss_real = SensorGNSS(

@@ -8,6 +8,6 @@ fname_data_sim = data_dir.joinpath('task_simulation.mat')
 fname_data_real = data_dir.joinpath('task_real.mat')
 
 
-RUN = 'sim'  # 'sim' or 'real', decided which data and tuning parameters to use
+RUN = 'real'  # 'sim' or 'real', decided which data and tuning parameters to use
 DEBUG = True and __debug__  # decedes is sanity checks is performed in classes
 PLOT_MIN_DT = 0.1  # Minimum time between points in plot
