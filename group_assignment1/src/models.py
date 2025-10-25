@@ -7,7 +7,7 @@ from states import (ErrorState, ImuMeasurement,
                     CorrectedImuMeasurement, NominalState,
                     GnssMeasurement, EskfState)
 from quaternion import RotationQuaterion
-from utils.indexing import block_3x3
+from utils.indexing import block_3x3, block_15x15
 from utils.cross_matrix import get_cross_matrix
 from solution import models as models_solu
 
@@ -63,17 +63,17 @@ class ModelIMU:
         Returns:
             z_corr: corrected IMU measurement
         """
-        acc_est = np.zeros(3)
-        avel_est = np.zeros(3)
+        acc_est = self.accm_correction @ (z_imu.acc - x_est_nom.accm_bias)
+        avel_est = self.gyro_correction @ (z_imu.avel - x_est_nom.gyro_bias)
 
-        # TODO remove this
-        z_corr = models_solu.ModelIMU.correct_z_imu(self, x_est_nom, z_imu)
+        z_corr = CorrectedImuMeasurement(acc=acc_est, avel=avel_est)
         return z_corr
 
+    
     def predict_nom(self,
-                    x_est_nom: NominalState,
-                    z_corr: CorrectedImuMeasurement,
-                    dt: float) -> NominalState:
+                x_est_nom: NominalState,
+                z_corr: CorrectedImuMeasurement,
+                dt: float) -> NominalState:
         """Predict the nominal state, given a corrected IMU measurement and a 
         time step, by discretizing (10.58) in the book.
 
@@ -89,18 +89,30 @@ class ModelIMU:
         Returns:
             x_nom_pred: predicted nominal state
         """
-        pos_pred = np.zeros(3)  # TODO
-        vel_pred = np.zeros(3)  # TODO
+           
+        R_nb = x_est_nom.ori.as_rotmat()                 
+        a_frame = R_nb @ z_corr.acc + self.g              
 
-        delta_rot = RotationQuaterion(1, np.zeros(3))  # TODO
-        ori_pred = np.zeros(3)  # TODO
+        vel_pred = x_est_nom.vel + dt * a_frame #Forward euler to discretize
+        pos_pred = x_est_nom.pos + dt * x_est_nom.vel + 0.5 * dt**2 * a_frame #Forward euler and integration to get pos i think correct
 
-        acc_bias_pred = np.zeros(3)  # TODO
-        gyro_bias_pred = np.zeros(3)  # TODO
+        k = dt * np.asarray(z_corr.avel).reshape(3,)
+        delta_rot = RotationQuaterion.from_avec(k)
+        ori_pred  = x_est_nom.ori @ delta_rot
 
-        # TODO remove this
-        x_nom_pred = models_solu.ModelIMU.predict_nom(
-            self, x_est_nom, z_corr, dt)
+
+        phi_acc  = np.exp(-self.accm_bias_p * dt) #1 order ODE sol for the bias
+        phi_gyro = np.exp(-self.gyro_bias_p * dt)
+        acc_bias_pred = phi_acc  * x_est_nom.accm_bias
+        gyro_bias_pred = phi_gyro * x_est_nom.gyro_bias
+
+        x_nom_pred = NominalState(
+                pos=pos_pred,
+                vel=vel_pred,
+                ori=ori_pred,
+                accm_bias=acc_bias_pred,
+                gyro_bias=gyro_bias_pred,
+            )
         return x_nom_pred
 
     def A_c(self,
@@ -128,8 +140,15 @@ class ModelIMU:
         S_acc = get_cross_matrix(z_corr.acc)
         S_omega = get_cross_matrix(z_corr.avel)
 
-        # TODO remove this
-        A_c = models_solu.ModelIMU.A_c(self, x_est_nom, z_corr)
+        A_c[block_3x3(0, 1)] = np.eye(3)
+        # Dont need correction since it is in corrected mesurment z:
+        A_c[block_3x3(1, 2)] = -Rq @ S_acc
+        # Not I, i since not perfect measurment
+        A_c[block_3x3(1, 3)] = -Rq @ self.accm_correction
+        A_c[block_3x3(2, 2)] = -S_omega
+        A_c[block_3x3(2, 4)] = -self.gyro_correction
+        A_c[block_3x3(3, 3)] = -self.accm_bias_p * np.eye(3)
+        A_c[block_3x3(4, 4)] = -self.gyro_bias_p * np.eye(3)
         return A_c
 
     def get_error_G_c(self,
@@ -147,9 +166,10 @@ class ModelIMU:
         """
         G_c = np.zeros((15, 12))
         Rq = x_est_nom.ori.as_rotmat()
-
-        # TODO remove this
-        G_c = models_solu.ModelIMU.get_error_G_c(self, x_est_nom)
+        G_c[block_3x3(1, 0)] = -Rq
+        G_c[block_3x3(2, 1)] = -np.eye(3)
+        G_c[block_3x3(3, 2)] = np.eye(3)
+        G_c[block_3x3(4, 3)] = np.eye(3)
 
         return G_c
 
@@ -175,19 +195,23 @@ class ModelIMU:
             A_d (ndarray[15, 15]): discrede transition matrix
             GQGT_d (ndarray[15, 15]): discrete noise covariance matrix
         """
-        A_c = None  # TODO
-        G_c = None  # TODO
-        GQGT_c = None  # TODO
+        A_c = self.A_c(x_est_nom, z_corr)  
+        G_c = self.get_error_G_c(x_est_nom)  
+        GQGT_c = G_c @ self.Q_c @ G_c.T
+ 
 
-        exponent = None  # TODO
-        VanLoanMatrix = None  # TODO
+        exponent = np.zeros((30, 30))
+        exponent[block_15x15(0, 0)] = -A_c
+        exponent[block_15x15(0, 1)] = GQGT_c
+        exponent[block_15x15(1, 1)] = A_c.T
+        exponent = exponent*dt
 
-        A_d = None  # TODO
-        GQGT_d = None  # TODO
+        VanLoanMatrix = scipy.linalg.expm(exponent)
+        V2 = VanLoanMatrix[:15, 15:]
+        V1 = VanLoanMatrix[15:, 15:]
 
-        # TODO remove this
-        A_d, GQGT_d = models_solu.ModelIMU.get_discrete_error_diff(
-            self, x_est_nom, z_corr, dt)
+        A_d = V1.T
+        GQGT_d = V1.T @ V2
 
         return A_d, GQGT_d
 
@@ -210,10 +234,17 @@ class ModelIMU:
         """
         x_est_prev_nom = x_est_prev.nom
         x_est_prev_err = x_est_prev.err
-        Ad, GQGTd = None, None  # TODO
-        P_pred = np.eye(15)  # TODO
+        Ad, GQGTd = self.get_discrete_error_diff(x_est_prev_nom, z_corr, dt)
+        mu_prev_vec = x_est_prev_err.mean
+        P_prev      = x_est_prev_err.cov
+        mu_pred_vec = Ad @ mu_prev_vec
+        P_pred      = Ad @ P_prev @ Ad.T + GQGTd
 
-        # TODO remove this
-        x_err_pred = models_solu.ModelIMU.predict_err(
-            self, x_est_prev, z_corr, dt)
-        return x_err_pred
+        return MultiVarGauss(mean=mu_pred_vec, cov=P_pred)
+    
+
+
+
+    
+
+
