@@ -188,10 +188,6 @@ class ModelIMU:
         G_c = self.get_error_G_c(x_est_nom)
         GQGT_c = G_c @ self.Q_c @ G_c.T
 
-        # exponent = np.block([
-        #     [-A_c, GQGT_c],
-        #     [np.zeros((15,15), A_c.T)]
-        #     ]) * dt
         
         exponent = np.block([
         [-A_c,     GQGT_c],

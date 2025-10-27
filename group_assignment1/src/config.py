@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 data_dir = Path(__file__).parents[1].joinpath('data')
 cache_dir = Path(__file__).parents[1].joinpath('cache')
 cache_dir.mkdir(parents=True, exist_ok=True)
